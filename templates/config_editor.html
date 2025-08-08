@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Configuration Editor</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.2/codemirror.min.js"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.2/codemirror.min.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.2/mode/yaml/yaml.min.js"></script>
+    <style>
+        body { 
+            font-family: 'Segoe UI', sans-serif; 
+            margin: 0;
+            padding: 0;
+            background: #f5f7fa;
+        }
+        .navbar {
+            background: #4361ee;
+            color: white;
+            padding: 15px 25px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        .navbar-title {
+            font-size: 20px;
+            font-weight: 600;
+        }
+        .navbar-links a {
+            color: white;
+            text-decoration: none;
+            margin-left: 20px;
+            font-weight: 500;
+        }
+        .navbar-user {
+            display: flex;
+            align-items: center;
+        }
+        .username {
+            margin-right: 20px;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 20px auto;
+            padding: 0 20px;
+        }
+        .header {
+            margin-bottom: 25px;
+        }
+        .header h1 {
+            color: #3f37c9;
+            margin-bottom: 5px;
+        }
+        .editor-container {
+            border: 1px solid #e1e4e8;
+            border-radius: 8px;
+            overflow: hidden;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.05);
+        }
+        .CodeMirror {
+            height: 70vh;
+            font-size: 14px;
+        }
+        .actions {
+            margin-top: 20px;
+            display: flex;
+            justify-content: flex-end;
+            gap: 15px;
+        }
+        .btn {
+            padding: 10px 25px;
+            border: none;
+            border-radius: 5px;
+            font-size: 15px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        .btn-primary {
+            background: #4361ee;
+            color: white;
+        }
+        .btn-primary:hover {
+            background: #3f37c9;
+        }
+        .btn-secondary {
+            background: #6c757d;
+            color: white;
+        }
+        .btn-secondary:hover {
+            background: #5a6268;
+        }
+        .message {
+            padding: 15px;
+            margin-bottom: 20px;
+            border-radius: 5px;
+            font-weight: 500;
+        }
+        .message-success {
+            background: #d4edda;
+            color: #155724;
+            border: 1px solid #c3e6cb;
+        }
+        .message-error {
+            background: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+        }
+        .permission-warning {
+            background: #fff3cd;
+            border-left: 4px solid #ffc107;
+            padding: 15px;
+            margin-bottom: 20px;
+        }
+    </style>
+</head>
+<body>
+    <nav class="navbar">
+        <div class="navbar-title">Dashboard Manager</div>
+        <div class="navbar-links">
+            <a href="/">Dashboard</a>
+            <a href="/config">Configuration</a>
+        </div>
+        <div class="navbar-user">
+            {% if logged_in %}
+                <span class="username">Welcome, {{ username }} ({{ role }})</span>
+                <a href="/logout">Logout</a>
+            {% endif %}
+        </div>
+    </nav>
+
+    <div class="container">
+        <div class="header">
+            <h1>Configuration Editor</h1>
+            <p>Edit your server configuration (changes require restart)</p>
+        </div>
+
+        {% if not can_edit %}
+            <div class="permission-warning">
+                <strong>Permission Notice:</strong> You don't have permission to edit configuration. 
+                Only administrators can modify system settings.
+            </div>
+        {% endif %}
+
+        {% if message %}
+            <div class="message message-{{ message.type }}">{{ message.text }}</div>
+        {% endif %}
+
+        <form method="POST" action="/config">
+            <div class="editor-container">
+                <textarea id="config-editor" name="config" {% if not can_edit %}readonly{% endif %}>{{ config }}</textarea>
+            </div>
+            {% if can_edit %}
+                <div class="actions">
+                    <button type="button" class="btn btn-secondary" onclick="window.location.reload()">Cancel</button>
+                    <button type="submit" class="btn btn-primary">Save Configuration</button>
+                </div>
+            {% endif %}
+        </form>
+    </div>
+
+    <script>
+        var editor = CodeMirror.fromTextArea(document.getElementById('config-editor'), {
+            lineNumbers: true,
+            mode: "yaml",
+            theme: "default",
+            indentUnit: 2,
+            tabSize: 2,
+            autofocus: true,
+            {% if not can_edit %}readOnly: true{% endif %}
+        });
+    </script>
+</body>
+</html>

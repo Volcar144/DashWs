@@ -1,0 +1,3 @@
+{"timestamp": "2025-08-08T14:21:18.167419", "username": "admi", "action": "login_failed", "details": "Invalid credentials", "ip": "127.0.0.1"}
+{"timestamp": "2025-08-08T14:21:27.380684", "username": "admi", "action": "login_failed", "details": "Invalid credentials", "ip": "127.0.0.1"}
+{"timestamp": "2025-08-08T14:21:39.824158", "username": "admi", "action": "login", "details": "Successful login", "ip": "127.0.0.1"}

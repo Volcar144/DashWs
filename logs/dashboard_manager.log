@@ -1,0 +1,9 @@
+2025-08-08 14:20:30,184 - DashboardManager - INFO - Starting Dashboard Manager
+2025-08-08 14:20:30,513 - DashboardManager - INFO - All services started
+2025-08-08 14:20:50,601 - DashboardManager - INFO - Adjusting thread pool: 10 -> 9
+2025-08-08 14:20:55,552 - DashboardManager - INFO - Adjusting thread pool: 9 -> 10
+2025-08-08 14:21:05,992 - DashboardManager - INFO - Adjusting thread pool: 10 -> 7
+2025-08-08 14:21:10,530 - DashboardManager - INFO - Adjusting thread pool: 7 -> 10
+2025-08-08 14:21:30,540 - DashboardManager - INFO - System stats: {"clients": 0, "messages": 0, "api_calls": 0}
+2025-08-08 14:22:02,522 - DashboardManager - WARNING - Shutting down... Signal: 2
+2025-08-08 14:22:03,533 - DashboardManager - INFO - Shutdown complete

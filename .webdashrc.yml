@@ -1,0 +1,52 @@
+api_endpoints:
+  weather:
+    api_key:
+    base_url: https://api.weatherapi.com/v1/
+    endpoints:
+      current: current.json?key=73207b11627b4c48b47144317250708&q=London&aqi=no
+auth:
+  jwt_secret: super-secret-key-282dddbffc22c3ccfc8a671f5055939c
+  token_expiration: 3600
+auto_config:
+  created: '2025-08-07T15:39:25.653111'
+logging:
+  backup_count: 5
+  file: dashboard_manager.log
+  level: INFO
+  max_bytes: 10485760
+performance_monitoring: true
+poll_intervals:
+  news: 120
+  stocks: 60
+  weather: 300
+rate_limits:
+  weather:
+    max: 10
+    replenish: 3
+redis:
+  channel: dashboard_updates
+  enabled: false
+  host: localhost
+  port: 6379
+request_threading:
+  backoff_factor: 1.5
+  cpu_threshold: 70
+  max_workers: 10
+  mem_threshold: 80
+  min_workers: 2
+  queue_size: 100
+server:
+  host: 0.0.0.0
+  port: 5000
+  public_url: null
+ssl:
+  cert: cert.pem
+  enabled: false
+  key: key.pem
+webui:
+  auth:
+    enabled: true
+    password: securepassword
+    username: admin
+  log_lines: 100
+  refresh_interval: 5

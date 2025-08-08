@@ -1,0 +1,20 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Error {{ error_code }}</title>
+    <style>
+        body { font-family: 'Segoe UI', sans-serif; background: #f5f7fa; }
+        .container { max-width: 800px; margin: 50px auto; padding: 30px; background: white; border-radius: 10px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); text-align: center; }
+        .error-code { font-size: 72px; font-weight: bold; color: #f72585; }
+        .error-message { font-size: 24px; margin: 20px 0; }
+        .home-link { display: inline-block; margin-top: 20px; padding: 10px 20px; background: #4361ee; color: white; text-decoration: none; border-radius: 5px; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="error-code">{{ error_code }}</div>
+        <div class="error-message">{{ error_message }}</div>
+        <a href="/" class="home-link">Return to Dashboard</a>
+    </div>
+</body>
+</html>

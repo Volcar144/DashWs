@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Dashboard Client</title>
+    <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { font-family: 'Segoe UI', sans-serif; background: #1e1e2e; color: #cdd6f4; }
+        .container { max-width: 1200px; margin: 0 auto; padding: 20px; }
+        .header { text-align: center; margin-bottom: 30px; }
+        .panels { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 20px; }
+        .panel { background: #313244; border-radius: 10px; overflow: hidden; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
+        .panel-header { background: #45475a; padding: 15px; font-weight: bold; }
+        .panel-body { padding: 15px; }
+        .data-item { margin-bottom: 15px; }
+        .data-label { font-size: 14px; color: #a6adc8; margin-bottom: 5px; }
+        .data-value { font-size: 24px; font-weight: bold; }
+        .status-bar { height: 5px; background: #585b70; margin-top: 10px; }
+        .status-fill { height: 100%; background: #a6e3a1; width: 0%; transition: width 0.5s; }
+        .connection-status { position: fixed; top: 20px; right: 20px; padding: 10px 15px; border-radius: 20px; }
+        .connected { background: #a6e3a1; color: #1e1e2e; }
+        .disconnected { background: #f38ba8; color: #1e1e2e; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>Dashboard Client</h1>
+            <p>Real-time Data Monitoring</p>
+        </div>
+
+        <div class="connection-status disconnected" id="connStatus">
+            DISCONNECTED
+        </div>
+
+        <div class="panels" id="dataPanels">
+            <!-- Panels will be dynamically created here -->
+        </div>
+    </div>
+
+    <script>
+        // Configuration
+        const config = {
+            clientId: 'sample_client_' + Math.random().toString(36).substr(2, 5),
+            services: ['weather', 'stocks', 'news']
+        };
+
+        // State management
+        const state = {
+            connected: false,
+            data: {},
+            token: null
+        };
+
+        // DOM elements
+        const connStatus = document.getElementById('connStatus');
+        const dataPanels = document.getElementById('dataPanels');
+
+        // Initialize
+        async function init() {
+            await fetchToken();
+            connectToServer();
+            createPanels();
+        }
+
+        // Fetch JWT token
+        async function fetchToken() {
+            try {
+                // Get the base URL from the current location
+                const baseURL = window.location.origin;
+                const response = await fetch(`${baseURL}/token?client_id=${config.clientId}`);
+                const data = await response.json();
+                state.token = data.token;
+            } catch (error) {
+                console.error('Token fetch failed:', error);
+                setTimeout(fetchToken, 5000);
+            }
+        }
+
+        // Connect to WebSocket server
+        function connectToServer() {
+            // Get the base URL from the current location
+            const baseURL = window.location.origin;
+            const socket = io(baseURL + '/primary', {
+                query: { token: state.token },
+                reconnection: true,
+                reconnectionAttempts: Infinity,
+                reconnectionDelay: 1000,
+                reconnectionDelayMax: 5000,
+                transports: ['websocket']  // Force WebSocket transport
+            });
+
+            socket.on('connect', () => {
+                state.connected = true;
+                updateConnectionStatus();
+                console.log('Connected to server');
+            });
+
+            socket.on('disconnect', () => {
+                state.connected = false;
+                updateConnectionStatus();
+                console.log('Disconnected from server');
+            });
+
+            socket.on('connect_error', (error) => {
+                console.error('Connection error:', error);
+                // Attempt to reconnect
+                setTimeout(() => {
+                    fetchToken().then(() => {
+                        socket.io.opts.query.token = state.token;
+                        socket.connect();
+                    });
+                }, 5000);
+            });
+
+            socket.on('initial_data', (data) => {
+                state.data = data;
+                updatePanels();
+            });
+
+            socket.on('data_update', (update) => {
+                state.data[update.source] = update.data;
+                updatePanels();
+            });
+        }
+
+        // Create panels for each service
+        function createPanels() {
+            config.services.forEach(service => {
+                const panel = document.createElement('div');
+                panel.className = 'panel';
+                panel.id = `panel-${service}`;
+                panel.innerHTML = `
+                    <div class="panel-header">${service.toUpperCase()}</div>
+                    <div class="panel-body" id="content-${service}">
+                        <div class="data-value">Loading...</div>
+                        <div class="status-bar"><div class="status-fill" id="status-${service}"></div></div>
+                    </div>
+                `;
+                dataPanels.appendChild(panel);
+            });
+        }
+
+        // Update panels with data
+        function updatePanels() {
+            config.services.forEach(service => {
+                const contentDiv = document.getElementById(`content-${service}`);
+                if (state.data[service]) {
+                    let content = '';
+                    for (const [key, value] of Object.entries(state.data[service])) {
+                        content += `<div class="data-item">
+                            <div class="data-label">${key}</div>
+                            <div class="data-value">${formatValue(value)}</div>
+                        </div>`;
+                    }
+                    contentDiv.innerHTML = content + `<div class="status-bar"><div class="status-fill" id="status-${service}"></div></div>`;
+
+                    // Animate status bar
+                    setTimeout(() => {
+                        const statusBar = document.getElementById(`status-${service}`);
+                        if (statusBar) statusBar.style.width = '100%';
+                    }, 100);
+                }
+            });
+        }
+
+        // Format values based on type
+        function formatValue(value) {
+            if (typeof value === 'number') {
+                return value.toLocaleString();
+            }
+            if (typeof value === 'object') {
+                return JSON.stringify(value, null, 2);
+            }
+            return value;
+        }
+
+        // Update connection status UI
+        function updateConnectionStatus() {
+            if (state.connected) {
+                connStatus.textContent = 'CONNECTED';
+                connStatus.className = 'connection-status connected';
+            } else {
+                connStatus.textContent = 'DISCONNECTED';
+                connStatus.className = 'connection-status disconnected';
+            }
+        }
+
+        // Initialize the client
+        init();
+    </script>
+</body>
+</html>
