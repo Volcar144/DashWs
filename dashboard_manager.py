@@ -10,10 +10,9 @@ if __name__ == '__main__':
     # Create application instance
     app = create_app()
 
+        from app.socketio import socketio
 
-    from socketio import socketio
-
-    socketio.run(
+        socketio.run(
             app,
             host=app.config['HOST'],
             port=app.config['PORT'],
