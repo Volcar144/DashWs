@@ -7,3 +7,17 @@
 2025-08-08 14:21:30,540 - DashboardManager - INFO - System stats: {"clients": 0, "messages": 0, "api_calls": 0}
 2025-08-08 14:22:02,522 - DashboardManager - WARNING - Shutting down... Signal: 2
 2025-08-08 14:22:03,533 - DashboardManager - INFO - Shutdown complete
+2025-08-09 13:56:31,454 - DashboardManager - WARNING - Shutting down... Signal: 2
+2025-08-09 13:56:31,455 - DashboardManager - INFO - Shutdown complete
+2025-08-09 16:51:16,203 - DashboardManager - WARNING - Shutting down... Signal: 2
+2025-08-09 16:51:16,203 - DashboardManager - INFO - Shutdown complete
+2025-08-09 16:53:34,391 - DashboardManager - WARNING - Shutting down... Signal: 2
+2025-08-09 16:53:34,393 - DashboardManager - INFO - Shutdown complete
+2025-08-09 17:29:37,287 - DashboardManager - WARNING - Shutting down... Signal: 2
+2025-08-09 17:29:37,287 - DashboardManager - INFO - Shutdown complete
+2025-08-09 17:32:57,162 - DashboardManager - WARNING - Shutting down... Signal: 2
+2025-08-09 17:32:57,162 - DashboardManager - INFO - Shutdown complete
+2025-08-09 17:34:45,989 - DashboardManager - WARNING - Shutting down... Signal: 2
+2025-08-09 17:34:45,990 - DashboardManager - INFO - Shutdown complete
+2025-08-09 17:36:45,174 - DashboardManager - WARNING - Shutting down... Signal: 2
+2025-08-09 17:36:45,175 - DashboardManager - INFO - Shutdown complete

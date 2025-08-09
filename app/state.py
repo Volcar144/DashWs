@@ -8,6 +8,9 @@ import concurrent.futures
 from datetime import datetime, timedelta
 from queue import Queue
 
+import requests
+
+
 class DashboardState:
     def __init__(self, config):
         self.config = config
@@ -31,7 +34,7 @@ class DashboardState:
             "active_threads": 0,
             "thread_pool_size": config['request_threading']['max_workers'],
             "scheduler_running": False,
-            "uptime": "00:00:00"  # Initialize uptime to prevent KeyError
+            "uptime": "00:00:00"
         }
         self.performance = {
             "cpu": 0,
@@ -52,11 +55,9 @@ class DashboardState:
         self.jobs = {}
         self.alerts_sent = set()
 
-        # Initialize uptime
         self.update_uptime()
 
     def update_uptime(self):
-        """Update uptime in stats"""
         delta = datetime.now() - datetime.fromisoformat(self.stats["start_time"])
         hours, remainder = divmod(delta.total_seconds(), 3600)
         minutes, seconds = divmod(remainder, 60)
@@ -96,7 +97,6 @@ class DashboardState:
             self.thread_pool._adjust_thread_count()
 
     def generate_auth_token(self, client_id):
-        """Generate JWT token for client authentication"""
         payload = {
             'client_id': client_id,
             'exp': datetime.utcnow() + timedelta(seconds=self.config['auth']['token_expiration'])
@@ -104,7 +104,6 @@ class DashboardState:
         return jwt.encode(payload, self.config['auth']['jwt_secret'], algorithm='HS256')
 
     def validate_auth_token(self, token):
-        """Validate JWT token"""
         try:
             payload = jwt.decode(token, self.config['auth']['jwt_secret'], algorithms=['HS256'])
             return payload['client_id']
@@ -114,14 +113,12 @@ class DashboardState:
             return None
 
     def check_thresholds(self):
-        """Check if system thresholds are exceeded and send alerts"""
         if not self.config['alerting']['enabled']:
             return
 
         alerts = []
         alert_key = ""
 
-        # CPU threshold
         cpu_threshold = self.config['alerting']['thresholds']['cpu']
         if self.performance['cpu'] > cpu_threshold:
             alert_key = f"cpu_{int(self.performance['cpu'])}"
@@ -129,7 +126,6 @@ class DashboardState:
                 alerts.append(f"High CPU usage: {self.performance['cpu']}% (threshold: {cpu_threshold}%)")
                 self.alerts_sent.add(alert_key)
 
-        # Memory threshold
         mem_threshold = self.config['alerting']['thresholds']['memory']
         if self.performance['memory'] > mem_threshold:
             alert_key = f"mem_{int(self.performance['memory'])}"
@@ -137,24 +133,20 @@ class DashboardState:
                 alerts.append(f"High Memory usage: {self.performance['memory']}% (threshold: {mem_threshold}%)")
                 self.alerts_sent.add(alert_key)
 
-        # Queue threshold
         queue_threshold = self.config['alerting']['thresholds']['queue']
         if self.stats['request_queue'] > queue_threshold:
             alert_key = f"queue_{self.stats['request_queue']}"
             if alert_key not in self.alerts_sent:
                 max_queue = self.config['request_threading']['queue_size']
-                alerts.append(
-                    f"Request queue full: {self.stats['request_queue']}/{max_queue} (threshold: {queue_threshold})")
+                alerts.append(f"Request queue full: {self.stats['request_queue']}/{max_queue} (threshold: {queue_threshold})")
                 self.alerts_sent.add(alert_key)
 
         if alerts:
             self.send_alerts(alerts)
 
     def send_alerts(self, alerts):
-        """Send alerts through configured channels"""
         message = "🚨 Dashboard Manager Alert:\n" + "\n".join(alerts)
 
-        # Webhook alerting
         if self.config['alerting']['webhook_url']:
             try:
                 requests.post(
@@ -164,9 +156,8 @@ class DashboardState:
             except Exception:
                 pass
 
-        # Send to WebUI clients
         if self.webui_clients:
-            from app.socketio import socketio
+            from app.socket_handlers import socketio
             socketio.emit('alert', {
                 'message': message,
                 'level': 'danger',

@@ -7,3 +7,4 @@ psutil==5.9.5
 PyJWT==2.8.0
 python-socketio==5.11.1
 python-engineio==4.9.0
+setuptools<81.0.0  # Add this line to avoid the warning

@@ -1,18 +1,16 @@
 #!/usr/bin/env python3
-"""
-Dashboard Manager - Main Entry Point
-"""
 import os
-import sys
 from app import create_app
+from app.services import DashboardManager
 
 if __name__ == '__main__':
-    # Create application instance
     app = create_app()
+    manager = DashboardManager(app)
 
-        from app.socketio import socketio
 
-        socketio.run(
+    from app.socket_handlers import socketio
+
+    socketio.run(
             app,
             host=app.config['HOST'],
             port=app.config['PORT'],

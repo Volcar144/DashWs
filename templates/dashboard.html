@@ -322,7 +322,7 @@
             <div class="scheduler-control" style="margin-bottom: 20px;">
                 <h3>Scheduler Status: 
                     <span id="schedulerStatus">{{ 'Running' if scheduler_running else 'Stopped' }}</span>
-                    <span class="service-status status-{{ 'running' if scheduler_r running else 'stopped' }}"></span>
+                    <span class="service-status status-{{ 'running' if scheduler_running else 'stopped' }}"></span>
                 </h3>
                 <div class="control-buttons">
                     <button class="btn btn-primary small-btn" id="startScheduler" {{ 'disabled' if scheduler_running else '' }}>Start Scheduler</button>

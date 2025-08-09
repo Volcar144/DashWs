@@ -1,23 +1,25 @@
-"""
-Utility Functions
-"""
 import os
+import json
 import requests
+import jwt
+import concurrent.futures
 from functools import wraps
-from flask import request, session, redirect, url_for, render_template
+from flask import current_app, request, session, redirect, url_for, render_template
+from datetime import datetime
+from queue import Empty
 
 
 def add_security_headers(response):
     """Add security headers to all responses"""
-    from app import CONFIG
+    config = current_app.config
 
     # HSTS if SSL enabled
-    if CONFIG['ssl']['enabled'] and CONFIG['security']['hsts_enabled']:
+    if config.get('ssl', {}).get('enabled', False) and config.get('security', {}).get('hsts_enabled', False):
         response.headers['Strict-Transport-Security'] = 'max-age=31536000; includeSubDomains'
 
     # Content Security Policy
-    if CONFIG['security']['csp_enabled']:
-        response.headers['Content-Security-Policy'] = CONFIG['security']['csp_policy']
+    if config.get('security', {}).get('csp_enabled', False):
+        response.headers['Content-Security-Policy'] = config['security']['csp_policy']
 
     # Other security headers
     response.headers['X-Content-Type-Options'] = 'nosniff'
@@ -29,23 +31,25 @@ def add_security_headers(response):
 
 def require_permission(permission):
     """Decorator to check user permissions"""
-    from app import CONFIG
 
     def decorator(f):
         @wraps(f)
         def decorated_function(*args, **kwargs):
-            if not CONFIG['rbac']['enabled']:
+            config = current_app.config
+
+            # If RBAC is disabled, allow access
+            if not config.get('rbac', {}).get('enabled', False):
                 return f(*args, **kwargs)
 
             username = session.get('username')
             if not username:
                 return redirect(url_for('routes.login'))
 
-            # Get user role
-            role = CONFIG['rbac']['users'].get(username, 'viewer')
+            # Get user role and permissions
+            role = config['rbac']['users'].get(username, 'viewer')
+            permissions = config['rbac']['roles'].get(role, [])
 
             # Check permissions
-            permissions = CONFIG['rbac']['roles'].get(role, [])
             if '*' not in permissions and permission not in permissions:
                 log_audit_event(username, 'access_denied', f"Tried to access {request.path}")
                 return render_template('error.html',
@@ -60,11 +64,8 @@ def require_permission(permission):
 
 def log_audit_event(username, action, details):
     """Log security-sensitive events"""
-    from app import CONFIG, request
-    from datetime import datetime
-    import json
-
-    if not CONFIG['audit_log']['enabled']:
+    config = current_app.config
+    if not config.get('audit_log', {}).get('enabled', False):
         return
 
     log_entry = {
@@ -76,18 +77,20 @@ def log_audit_event(username, action, details):
     }
 
     try:
-        audit_log_path = os.path.join('logs', CONFIG['audit_log']['file'])
+        audit_log_path = os.path.join('logs', config['audit_log']['file'])
         with open(audit_log_path, 'a', encoding='utf-8') as f:
             f.write(json.dumps(log_entry) + '\n')
-    except Exception:
-        pass
+    except Exception as e:
+        current_app.logger.error(f"Audit log write failed: {str(e)}")
 
 
 def fetch_single_endpoint(api_name, endpoint_name, endpoint_path):
-    from app import CONFIG, state
+    """Fetch data from a single API endpoint"""
+    config = current_app.config
+    state = current_app.state
 
     try:
-        api_config = CONFIG['api_endpoints'][api_name]
+        api_config = config['api_endpoints'][api_name]
         base_url = api_config['base_url'].rstrip('/')
         endpoint = endpoint_path.split('?')[0]
         params = {}
@@ -101,6 +104,7 @@ def fetch_single_endpoint(api_name, endpoint_name, endpoint_path):
 
         # Check rate limits
         if state.api_tokens[api_name] <= 0:
+            current_app.logger.warning(f"Rate limited: {api_name}")
             return None
 
         headers = {'Authorization': f"Bearer {api_config.get('api_key', '')}"}
@@ -110,30 +114,29 @@ def fetch_single_endpoint(api_name, endpoint_name, endpoint_path):
         state.api_tokens[api_name] -= 1
         state.stats["api_calls"] += 1
         return endpoint_name, response.json()
-    except Exception:
+    except Exception as e:
+        current_app.logger.error(f"API Error ({api_name}/{endpoint_name}): {str(e)}")
         return endpoint_name, None
 
 
-def process_api_requests():
-    from app import state
-    from queue import Empty
-
-    while state.running:
+def process_api_requests(app):
+    """Process API requests from the queue"""
+    while app.state.running:
         try:
-            task = state.request_queue.get(timeout=1)
+            task = app.state.request_queue.get(timeout=1)
             api_name, callback = task
 
-            state.stats['active_threads'] += 1
-            state.stats['request_queue'] = state.request_queue.qsize()
+            app.state.stats['active_threads'] += 1
+            app.state.stats['request_queue'] = app.state.request_queue.qsize()
 
             # For APIs with multiple endpoints
-            if 'endpoints' in state.config['api_endpoints'][api_name]:
-                endpoints = state.config['api_endpoints'][api_name]['endpoints']
+            if 'endpoints' in app.config['api_endpoints'][api_name]:
+                endpoints = app.config['api_endpoints'][api_name]['endpoints']
                 results = {}
 
                 futures = []
                 for endpoint_name, endpoint_path in endpoints.items():
-                    future = state.thread_pool.submit(
+                    future = app.state.thread_pool.submit(
                         fetch_single_endpoint,
                         api_name,
                         endpoint_name,
@@ -147,24 +150,26 @@ def process_api_requests():
                         results[endpoint_name] = data
 
                 if results:
-                    callback(api_name, results)
+                    callback(results)
             else:
                 # For single endpoint APIs
                 data = fetch_single_endpoint(api_name, 'data', '')
                 if data:
-                    callback(api_name, {'data': data[1]})
+                    callback({'data': data[1]})
 
-            state.stats['active_threads'] -= 1
-            state.request_queue.task_done()
+            app.state.stats['active_threads'] -= 1
+            app.state.request_queue.task_done()
         except Empty:
             continue
-        except Exception:
-            state.stats['active_threads'] -= 1
+        except Exception as e:
+            app.logger.error(f"Request processing error: {str(e)}")
+            app.state.stats['active_threads'] -= 1
 
 
 def get_log_lines(num_lines=100):
-    from app import CONFIG
-    log_file = os.path.join('logs', CONFIG['logging']['file'])
+    """Get the most recent log lines"""
+    config = current_app.config
+    log_file = os.path.join('logs', config['logging']['file'])
 
     try:
         with open(log_file, 'r', encoding='utf-8') as f:

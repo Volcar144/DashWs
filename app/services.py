@@ -1,14 +1,11 @@
-"""
-Background Services
-"""
-import os
 import signal
 import threading
 import time
+import json
 import requests
+import psutil
 from apscheduler.schedulers.background import BackgroundScheduler
-from . import CONFIG, state, utils, logger
-from .socketio import emit_log_update
+from flask import current_app
 
 
 class DashboardManager:
@@ -16,151 +13,146 @@ class DashboardManager:
         self.app = app
         self.scheduler = BackgroundScheduler()
         self.request_processor = None
-        self.thread_pool = None
 
         signal.signal(signal.SIGINT, self.graceful_shutdown)
         signal.signal(signal.SIGTERM, self.graceful_shutdown)
 
     def start_services(self):
-        """Start all background services"""
-        # Start request processor thread
+        """Start all background services and scheduled jobs"""
+        from .utils import process_api_requests
+
         self.request_processor = threading.Thread(
-            target=utils.process_api_requests,
-            daemon=True
+            target=process_api_requests,
+            daemon=True,
+            kwargs={'app': self.app}
         )
         self.request_processor.start()
 
-        # Start scheduler
         self.scheduler.start()
-        state.stats['scheduler_running'] = True
+        self.app.state.stats['scheduler_running'] = True
 
-        # Add polling jobs
-        for api in CONFIG['poll_intervals']:
-            job_id = f'poll_{api}'
+        # Add polling jobs for each API service
+        for api in self.app.config['poll_intervals']:
             self.scheduler.add_job(
                 self.update_service,
                 'interval',
-                seconds=CONFIG['poll_intervals'][api],
+                seconds=self.app.config['poll_intervals'][api],
                 args=[api],
-                id=job_id
+                id=f'poll_{api}'
             )
-            state.jobs[job_id] = True
+            self.app.state.jobs[f'poll_{api}'] = True
 
-        self.scheduler.add_job(self.token_replenisher, 'interval', minutes=5, id='token_replenisher')
-        self.scheduler.add_job(self.update_performance_stats, 'interval', seconds=5, id='performance_stats')
-        self.scheduler.add_job(self.emit_log_update_job, 'interval', seconds=CONFIG['webui']['refresh_interval'],
-                               id='log_update')
-        self.scheduler.add_job(self.log_stats, 'interval', minutes=1, id='log_stats')
+        # Add maintenance jobs
+        self.scheduler.add_job(
+            self.token_replenisher,
+            'interval',
+            minutes=5,
+            id='token_replenisher'
+        )
+        self.scheduler.add_job(
+            self.update_performance_stats,
+            'interval',
+            seconds=5,
+            id='performance_stats'
+        )
+        self.scheduler.add_job(
+            self.emit_log_update,
+            'interval',
+            seconds=self.app.config['webui']['refresh_interval'],
+            id='log_update'
+        )
+        self.scheduler.add_job(
+            self.log_stats,
+            'interval',
+            minutes=1,
+            id='log_stats'
+        )
 
     def token_replenisher(self):
-        if not state.running:
+        """Replenish API rate limit tokens"""
+        if not self.app.state.running:
             return
 
-        for api, limits in CONFIG['rate_limits'].items():
-            state.api_tokens[api] = min(
-                state.api_tokens[api] + limits["replenish"],
+        for api, limits in self.app.config['rate_limits'].items():
+            self.app.state.api_tokens[api] = min(
+                self.app.state.api_tokens[api] + limits["replenish"],
                 limits["max"]
             )
 
     def update_performance_stats(self):
-        if not CONFIG['performance_monitoring']:
+        """Update system performance metrics"""
+        if not self.app.config['performance_monitoring']:
             return
 
-        state.performance['cpu'] = psutil.cpu_percent()
-        state.performance['memory'] = psutil.virtual_memory().percent
+        self.app.state.performance['cpu'] = psutil.cpu_percent()
+        self.app.state.performance['memory'] = psutil.virtual_memory().percent
 
         # Network monitoring
         net_io = psutil.net_io_counters()
-        prev_net_io = state.performance.get('prev_net_io', None)
+        prev_net_io = self.app.state.performance.get('prev_net_io', None)
 
-        state.performance['bytes_sent'] = net_io.bytes_sent
-        state.performance['bytes_recv'] = net_io.bytes_recv
+        self.app.state.performance['bytes_sent'] = net_io.bytes_sent
+        self.app.state.performance['bytes_recv'] = net_io.bytes_recv
 
         if prev_net_io:
             time_elapsed = 5  # seconds between runs
-            state.performance['bytes_sent_rate'] = (net_io.bytes_sent - prev_net_io.bytes_sent) / time_elapsed
-            state.performance['bytes_recv_rate'] = (net_io.bytes_recv - prev_net_io.bytes_recv) / time_elapsed
+            self.app.state.performance['bytes_sent_rate'] = (net_io.bytes_sent - prev_net_io.bytes_sent) / time_elapsed
+            self.app.state.performance['bytes_recv_rate'] = (net_io.bytes_recv - prev_net_io.bytes_recv) / time_elapsed
 
-        state.performance['prev_net_io'] = net_io
-        state.adjust_thread_pool()
+        self.app.state.performance['prev_net_io'] = net_io
+        self.app.state.adjust_thread_pool()
+        self.app.state.check_thresholds()
 
-        # Check for threshold alerts
-        state.check_thresholds()
-
-    def emit_log_update_job(self):
-        emit_log_update()
+    def emit_log_update(self):
+        """Trigger log update emission to web clients"""
+        from .socket_handlers import emit_log_update
+        emit_log_update(self.app)
 
     def log_stats(self):
+        """Log system statistics"""
         stats = {
-            "clients": len(state.primary_clients),
-            "messages": state.stats["messages_sent"],
-            "api_calls": state.stats["api_calls"]
+            "clients": len(self.app.state.primary_clients),
+            "messages": self.app.state.stats["messages_sent"],
+            "api_calls": self.app.state.stats["api_calls"]
         }
-        logger.info(f"System stats: {json.dumps(stats)}")
+        self.app.logger.info(f"System stats: {json.dumps(stats)}")
 
     def update_service(self, api_name):
-        if not state.running:
+        """Update data for a specific service"""
+        if not self.app.state.running:
             return
 
-        def process_results(api_name, results):
-            state.latest_data[api_name] = results
+        def process_results(results):
+            from .socket_handlers import socketio
+            self.app.state.latest_data[api_name] = results
 
             # Broadcast to primary clients
-            for sid in list(state.primary_clients.keys()):
+            for sid in list(self.app.state.primary_clients.keys()):
                 socketio.emit('data_update', {
                     'source': api_name,
                     'data': results
                 }, room=sid, namespace='/primary')
 
-            state.stats["messages_sent"] += len(state.primary_clients)
+            self.app.state.stats["messages_sent"] += len(self.app.state.primary_clients)
 
         try:
-            state.request_queue.put((api_name, process_results), timeout=1)
-            state.stats['request_queue'] = state.request_queue.qsize()
-        except Full:
-            time.sleep(CONFIG['request_threading']['backoff_factor'])
+            self.app.state.request_queue.put((api_name, process_results), timeout=1)
+            self.app.state.stats['request_queue'] = self.app.state.request_queue.qsize()
+        except Exception as e:
+            self.app.logger.warning(f"Request queue full for {api_name}, skipping update")
+            time.sleep(self.app.config['request_threading']['backoff_factor'])
 
     def graceful_shutdown(self, signum, frame):
-        logger.warning(f"Shutting down... Signal: {signum}")
-        state.running = False
+        """Handle graceful shutdown of services"""
+        self.app.logger.warning(f"Shutting down... Signal: {signum}")
+        self.app.state.running = False
 
-        # Shutdown components
+        # Shutdown scheduler
         if self.scheduler.running:
             self.scheduler.shutdown()
 
-        # Wait for threads
+        # Wait for request processor thread
         if self.request_processor and self.request_processor.is_alive():
             self.request_processor.join(timeout=5)
 
-        logger.info("Shutdown complete")
-        sys.exit(0)
-
-    def run(self):
-        # Create HTML templates if missing
-        os.makedirs('templates', exist_ok=True)
-
-        # Create templates (implementation from original script)
-        # ... (template creation code from original script) ...
-
-        # Start background services
-        self.start_services()
-
-        # Display connection info
-        public_url = CONFIG['server'].get('public_url', f"http://{state.ip_address}")
-        if public_url == "0.0.0.0":
-            public_url = f"http://{state.ip_address}"
-
-        port = CONFIG['server']['port']
-        print("\n" + "=" * 60)
-        print(f" Dashboard Manager Running")
-        print("=" * 60)
-        print(f" Single Port Serving: {public_url}:{port}")
-        print(f" Web UI:             {public_url}:{port}/")
-        print(f" Login:              {public_url}:{port}/login")
-        print(f" Configuration:      {public_url}:{port}/config")
-        print(f" Health Checks:      {public_url}:{port}/health")
-        print(f" Primary WebSocket:  {public_url}:{port}/primary")
-        print(f" Backup WebSocket:   {public_url}:{port}/backup")
-        print(f" Token Generation:   {public_url}:{port}/token?client_id=your_client")
-        print(f" Sample Client:      {public_url}:{port}/sample_client")
-        print("=" * 60 + "\n")
+        self.app.logger.info("Shutdown complete")

@@ -1,17 +1,10 @@
-"""
-Application Factory
-"""
 from flask import Flask
 from .config import CONFIG, configure_logging
+from .services import DashboardManager
 from .state import DashboardState
-from . import routes, socketio, services
-
 
 def create_app():
-    """Create and configure the Flask application"""
-    app = Flask(__name__)
-
-    # Load configuration
+    app = Flask(__name__, template_folder='../templates')  # Add template_folder parameter
     app.config.update(CONFIG)
     app.config['HOST'] = CONFIG['server']['host']
     app.config['PORT'] = CONFIG['server']['port']
@@ -24,12 +17,14 @@ def create_app():
     # Initialize application state
     app.state = DashboardState(CONFIG)
 
-    # Register blueprints and routes
-    app.register_blueprint(routes.bp)
+    app.DashboardManager = DashboardManager(app)  # Add this line
+
+    # Initialize routes
+    from .routes import bp as routes_blueprint
+    app.register_blueprint(routes_blueprint)
 
     # Initialize SocketIO
-    socketio.init_app(app)
+    from .socket_handlers import init_socketio
+    init_socketio(app)
 
-    # Initialize services
-    app.manager = services.DashboardManager(app)
     return app

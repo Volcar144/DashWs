@@ -2,20 +2,21 @@
 Application Routes
 """
 import os
-import json
 import yaml
-from flask import Blueprint, request, render_template, jsonify, session, redirect, url_for
-from . import CONFIG, utils
-from .state import DashboardState
-from .services import manager
+from flask import Blueprint, request, render_template, jsonify, session, redirect, url_for, current_app
+from datetime import datetime
+
+from .globals import get_state, get_config
+from .services import DashboardManager
+from .utils import require_permission, log_audit_event
 
 bp = Blueprint('routes', __name__)
 
-
 @bp.route('/login', methods=['GET', 'POST'])
 def login():
+    config = current_app.config
     # If auth is disabled, redirect to dashboard
-    if not CONFIG['webui']['auth']['enabled']:
+    if not config['webui']['auth']['enabled']:
         return redirect(url_for('.dashboard'))
 
     if request.method == 'POST':
@@ -23,61 +24,91 @@ def login():
         password = request.form['password']
 
         # Check credentials
-        if (username == CONFIG['webui']['auth']['username'] and
-                password == CONFIG['webui']['auth']['password']):
+        if (username == config['webui']['auth']['username'] and
+                password == config['webui']['auth']['password']):
 
             # Determine role
-            role = CONFIG['rbac']['users'].get(username, 'viewer')
+            role = config['rbac']['users'].get(username, 'viewer')
 
             # Set session
             session['logged_in'] = True
             session['username'] = username
             session['role'] = role
 
-            utils.log_audit_event(username, 'login', "Successful login")
+            log_audit_event(username, 'login', "Successful login")
             return redirect(url_for('.dashboard'))
         else:
-            utils.log_audit_event(username, 'login_failed', "Invalid credentials")
+            log_audit_event(username, 'login_failed', "Invalid credentials")
             return render_template('login.html', error='Invalid credentials')
     return render_template('login.html')
-
 
 @bp.route('/logout')
 def logout():
     username = session.get('username', 'unknown')
-    utils.log_audit_event(username, 'logout', "User logged out")
+    log_audit_event(username, 'logout', "User logged out")
     session.pop('logged_in', None)
     session.pop('username', None)
     session.pop('role', None)
     return redirect(url_for('.login'))
 
-
-@bp.route('/favicon.ico')
-def favicon():
-    return '', 404
-
-
 @bp.route('/health')
 def health_check():
-    """Simple health check endpoint"""
-    from app import state
-    state.update_uptime()  # Ensure uptime is updated
+    current_app.state.update_uptime()
     return jsonify({
         'status': 'OK',
         'timestamp': datetime.now().isoformat(),
-        'uptime': state.stats['uptime']
+        'uptime': current_app.state.stats['uptime']
     })
 
+@bp.route('/')
+@require_permission('view_dashboard')
+def dashboard():
+    current_app.state.stats["webui_views"] += 1
+    current_app.state.update_uptime()
+
+
+    host = current_app.config['server']['host']
+    public_url = current_app.config['server'].get('public_url', f"http://{current_app.state.ip_address}")
+    if public_url == "0.0.0.0":
+        public_url = f"http://{current_app.state.ip_address}"
+
+    port = current_app.config['server']['port']
+    primary_ws = f"{public_url}:{port}/primary"
+    backup_ws = f"{public_url}:{port}/backup"
+
+    # Get job statuses
+    job_statuses = {}
+    if hasattr(current_app, 'DashboardManager') and current_app.DashboardManager.scheduler.running:
+        for api in current_app.config['poll_intervals']:
+            job_id = f'poll_{api}'
+            job = current_app.DashboardManager.scheduler.get_job(job_id)
+            job_id = f'poll_{api}'
+            job = current_app.DashboardManager.scheduler.get_job(job_id)
+            if job:
+                job_statuses[api] = {
+                    'next_run': job.next_run_time.strftime('%Y-%m-%d %H:%M:%S') if job.next_run_time else 'N/A',
+                    'enabled': not job.pending
+                }
+
+    return render_template('dashboard.html',
+                       config=current_app.config,
+                       state=current_app.state,
+                       auth_enabled=current_app.config['webui']['auth']['enabled'],
+                       primary_ws=primary_ws,
+                       backup_ws=backup_ws,
+                       logged_in=session.get('logged_in', False),
+                       username=session.get('username', ''),
+                       role=session.get('role', 'viewer'),
+                       job_statuses=job_statuses,
+                       scheduler_running=current_app.DashboardManager.scheduler.running if hasattr(current_app, 'DashboardManager') else False)
 
 @bp.route('/health/detailed')
 def detailed_health_check():
-    """Detailed system health report"""
-    from app import state, manager
-
+    state = get_state()
     services = {}
-    for api in CONFIG['poll_intervals']:
+    for api in get_config()['poll_intervals']:
         job_id = f'poll_{api}'
-        job = manager.scheduler.get_job(job_id)
+        job = DashboardManager.scheduler.get_job(job_id)
         services[api] = {
             'status': 'active' if job and not job.pending else 'inactive',
             'last_run': job.previous_run_time.isoformat() if job and job.previous_run_time else 'never',
@@ -96,59 +127,20 @@ def detailed_health_check():
     })
 
 
-@bp.route('/')
-@utils.require_permission('view_dashboard')
-def dashboard():
-    from app import state, manager
-    state.stats["webui_views"] += 1
-    state.update_uptime()  # Ensure uptime is updated
-
-    # Prepare connection URLs
-    host = CONFIG['server']['host']
-    public_url = CONFIG['server'].get('public_url', f"http://{state.ip_address}")
-    if public_url == "0.0.0.0":
-        public_url = f"http://{state.ip_address}"
-
-    port = CONFIG['server']['port']
-    primary_ws = f"{public_url}:{port}/primary"
-    backup_ws = f"{public_url}:{port}/backup"
-
-    # Get job statuses
-    job_statuses = {}
-    if manager.scheduler.running:
-        for api in CONFIG['poll_intervals']:
-            job_id = f'poll_{api}'
-            job = manager.scheduler.get_job(job_id)
-            if job:
-                job_statuses[api] = {
-                    'next_run': job.next_run_time.strftime('%Y-%m-%d %H:%M:%S') if job.next_run_time else 'N/A',
-                    'enabled': not job.pending
-                }
-
-    return render_template('dashboard.html',
-                           config=CONFIG,
-                           state=state,
-                           auth_enabled=CONFIG['webui']['auth']['enabled'],
-                           primary_ws=primary_ws,
-                           backup_ws=backup_ws,
-                           logged_in=session.get('logged_in', False),
-                           username=session.get('username', ''),
-                           role=session.get('role', 'viewer'),
-                           job_statuses=job_statuses,
-                           scheduler_running=manager.scheduler.running if manager else False)
-
-
 @bp.route('/token', methods=['GET'])
-@utils.require_permission('generate_token')
+@require_permission('generate_token')
 def generate_token():
-    from app import state
+    state = get_state()
     client_id = request.args.get('client_id', 'sample_client')
     token = state.generate_auth_token(client_id)
-    return jsonify({'token': token})
-
+    return jsonify({
+        'status': 'success',
+        'token': token,
+        'client_id': client_id
+    })
 
 @bp.route('/config', methods=['GET', 'POST'])
-@utils.require_permission('view_config')
+@require_permission('view_config')
 def config_editor():
     config_path = os.path.expanduser('~/.webdashrc.yml')
     message = None
@@ -156,15 +148,14 @@ def config_editor():
     if request.method == 'POST' and session.get('role') == 'admin':
         try:
             new_config = request.form['config']
-            # Validate the YAML before saving
             parsed = yaml.safe_load(new_config)
             with open(config_path, 'w') as f:
                 yaml.dump(parsed, f)
             message = {'type': 'success', 'text': 'Configuration saved! Restart server to apply changes.'}
-            utils.log_audit_event(session['username'], 'config_update', "Configuration modified")
+            log_audit_event(session['username'], 'config_update', "Configuration modified")
         except Exception as e:
             message = {'type': 'error', 'text': f'Error saving config: {str(e)}'}
-            utils.log_audit_event(session['username'], 'config_update_failed', f"Error: {str(e)}")
+            log_audit_event(session['username'], 'config_update_failed', f"Error: {str(e)}")
 
     try:
         with open(config_path, 'r') as f:
@@ -175,88 +166,77 @@ def config_editor():
     return render_template('config_editor.html',
                            config=current_config,
                            message=message,
-                           auth_enabled=CONFIG['webui']['auth']['enabled'],
+                           auth_enabled=get_config()['webui']['auth']['enabled'],
                            logged_in=session.get('logged_in', False),
                            username=session.get('username', ''),
                            role=session.get('role', 'viewer'),
                            can_edit=session.get('role') == 'admin')
 
-
 @bp.route('/control/scheduler/start', methods=['POST'])
-@utils.require_permission('control_services')
+@require_permission('control_services')
 def start_scheduler():
-    from app import manager, state
-    if not manager.scheduler.running:
-        manager.scheduler.start()
+    state = get_state()
+    if not DashboardManager.scheduler.running:
+        DashboardManager.scheduler.start()
         state.stats['scheduler_running'] = True
-        utils.log_audit_event(session['username'], 'scheduler_start', "Scheduler started")
+        log_audit_event(session['username'], 'scheduler_start', "Scheduler started")
         return jsonify({'status': 'success', 'message': 'Scheduler started'})
     return jsonify({'status': 'info', 'message': 'Scheduler already running'})
 
-
 @bp.route('/control/scheduler/stop', methods=['POST'])
-@utils.require_permission('control_services')
+@require_permission('control_services')
 def stop_scheduler():
-    from app import manager, state
-    if manager.scheduler.running:
-        manager.scheduler.shutdown()
+    state = get_state()
+    if DashboardManager.scheduler.running:
+        DashboardManager.scheduler.shutdown()
         state.stats['scheduler_running'] = False
-        utils.log_audit_event(session['username'], 'scheduler_stop', "Scheduler stopped")
+        log_audit_event(session['username'], 'scheduler_stop', "Scheduler stopped")
         return jsonify({'status': 'success', 'message': 'Scheduler stopped'})
     return jsonify({'status': 'info', 'message': 'Scheduler already stopped'})
 
-
 @bp.route('/control/job/<job_id>/enable', methods=['POST'])
-@utils.require_permission('control_services')
+@require_permission('control_services')
 def enable_job(job_id):
-    from app import manager
-    job = manager.scheduler.get_job(job_id)
+    job = DashboardManager.scheduler.get_job(job_id)
     if job:
         job.resume()
-        utils.log_audit_event(session['username'], 'job_enable', f"Job {job_id} enabled")
+        log_audit_event(session['username'], 'job_enable', f"Job {job_id} enabled")
         return jsonify({'status': 'success', 'message': f'Job {job_id} enabled'})
     return jsonify({'status': 'error', 'message': f'Job {job_id} not found'}), 404
 
-
 @bp.route('/control/job/<job_id>/disable', methods=['POST'])
-@utils.require_permission('control_services')
+@require_permission('control_services')
 def disable_job(job_id):
-    from app import manager
-    job = manager.scheduler.get_job(job_id)
+    job = DashboardManager.scheduler.get_job(job_id)
     if job:
         job.pause()
-        utils.log_audit_event(session['username'], 'job_disable', f"Job {job_id} disabled")
+        log_audit_event(session['username'], 'job_disable', f"Job {job_id} disabled")
         return jsonify({'status': 'success', 'message': f'Job {job_id} disabled'})
     return jsonify({'status': 'error', 'message': f'Job {job_id} not found'}), 404
 
-
 @bp.route('/control/job/<job_id>/trigger', methods=['POST'])
-@utils.require_permission('control_services')
+@require_permission('control_services')
 def trigger_job(job_id):
-    from app import manager
-    job = manager.scheduler.get_job(job_id)
+    job = DashboardManager.scheduler.get_job(job_id)
     if job:
         job.modify(next_run_time=datetime.now())
-        utils.log_audit_event(session['username'], 'job_trigger', f"Job {job_id} triggered")
+        log_audit_event(session['username'], 'job_trigger', f"Job {job_id} triggered")
         return jsonify({'status': 'success', 'message': f'Job {job_id} triggered'})
     return jsonify({'status': 'error', 'message': f'Job {job_id} not found'}), 404
 
-
 @bp.route('/control/service/<service_name>/trigger', methods=['POST'])
-@utils.require_permission('control_services')
+@require_permission('control_services')
 def trigger_service(service_name):
-    from app import manager
-    if service_name in CONFIG['poll_intervals']:
-        manager.update_service(service_name)
-        utils.log_audit_event(session['username'], 'service_trigger', f"Service {service_name} triggered")
+    if service_name in get_config()['poll_intervals']:
+        DashboardManager.update_service(service_name)
+        log_audit_event(session['username'], 'service_trigger', f"Service {service_name} triggered")
         return jsonify({'status': 'success', 'message': f'Service {service_name} triggered'})
     return jsonify({'status': 'error', 'message': f'Service {service_name} not found'}), 404
 
-
 @bp.route('/sample_client')
 def serve_sample_client():
-    # This would be served from a static file in production
-    return """<!DOCTYPE html>
+    return """
+    <!DOCTYPE html>
 <html>
 <head>
     <title>Dashboard Client</title>
